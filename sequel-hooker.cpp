@@ -8,6 +8,7 @@
 #include <signal.h>
 #include <mysql/mysql.h>
 #include <httplib.h>
+#include <nlohmann/json.hpp>
 
 const char *LOCK_FILE = "/tmp/hooker.lock";
 
@@ -30,6 +31,22 @@ void signalHandler(int signum) {
     remove(LOCK_FILE);
     // Terminate the process
     exit(signum);
+}
+
+std::string rowToJson(MYSQL_RES* res, MYSQL_ROW row) {
+    nlohmann::json jsonObj;
+
+    MYSQL_FIELD* fields = mysql_fetch_fields(res);
+    int numFields = mysql_num_fields(res);
+    
+    for (int i = 0; i < numFields; i++) {
+        const char* field_name = fields[i].name;
+        const char* field_value = row[i] ? row[i] : "NULL";
+        
+        jsonObj[field_name] = field_value;
+    }
+
+    return jsonObj.dump();
 }
 
 void clientMode() {
@@ -122,33 +139,31 @@ void clientMode() {
     }
 
     res = mysql_store_result(conn);
+// Process the results and prepare the data for HTTP POST
+while ((row = mysql_fetch_row(res)) != NULL) {
+    int numFields = mysql_num_fields(res);
+    std::string payload = "{";
 
-    // Process the results and prepare the data for HTTP POST
-    while ((row = mysql_fetch_row(res)) != NULL) {
-        int numFields = mysql_num_fields(res);
-        std::string payload;
-
-        for (int i = 0; i < numFields; i++) {
-            if (i != 0) {
-                payload += ","; // Add a comma between fields
-            }
-            payload += row[i] ? row[i] : "NULL"; // If the field is NULL, append the string "NULL"
+    for (int i = 0; i < numFields; i++) {
+        if (i != 0) {
+            payload += ","; // Add a comma between fields
         }
-
-        std::cout << "Payload being sent: " << payload << std::endl; 
-
-        httplib::SSLClient cli(client_url);
-        auto response = cli.Post("/", payload, "text/plain");
-
-        if(response && response->status == 200) {
-            std::cout << "Data POSTed successfully!" << std::endl;
-        } else {
-            std::cerr << "Failed to POST data. HTTP Status: "
-                      << (response ? std::to_string(response->status) : "No Response")
-                      << ". Reason: " << (response ? response->body : "Unknown error")
-                      << std::endl;
-        }
+        payload += "\"" + std::string(mysql_fetch_field_direct(res, i)->name) + "\": \"" + (row[i] ? row[i] : "NULL") + "\"";
     }
+
+    payload += "}";
+
+    std::cout << "Payload being sent: " << payload << std::endl;
+
+    httplib::SSLClient cli(client_url);
+    auto response = cli.Post("/", payload.c_str(), "application/json");
+
+    if (!response) {
+        std::cerr << "Failed to get a response from the server. The server might be down or there might be a network issue." << std::endl;
+    } else if (response->status != 200) {
+        std::cerr << "Failed to POST data. HTTP Status: " << response->status << ". Reason: " << response->body << std::endl;
+    }
+}
 
     // Cleanup
     mysql_free_result(res);
