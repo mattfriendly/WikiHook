@@ -60,6 +60,9 @@ std::string rowToJson(MYSQL_RES* res, MYSQL_ROW row) {
 }
 
 void clientMode() {
+    // Initialize log file
+    initLogFile();
+
     MYSQL *conn;
     MYSQL_RES *res;
     MYSQL_ROW row;
@@ -75,68 +78,66 @@ void clientMode() {
     const char* ca_file = getenv("MYSQL_CA_FILE");
 
     if (!db_host) {
-        std::cerr << "Error: DB_HOST2 environment variable is not set!" << std::endl;
-        exit(EXIT_FAILURE);
+        logFile << "Error: DB_HOST2 environment variable is not set!" << std::endl;
+        return;
     }
     if (!db_user) {
-        std::cerr << "Error: DB_USER2 environment variable is not set!" << std::endl;
-        exit(EXIT_FAILURE);
+        logFile << "Error: DB_USER2 environment variable is not set!" << std::endl;
+        return;
     }
     if (!db_password) {
-        std::cerr << "Error: DB_PASSWORD2 environment variable is not set!" << std::endl;
-        exit(EXIT_FAILURE);
+        logFile << "Error: DB_PASSWORD2 environment variable is not set!" << std::endl;
+        return;
     }
     if (!db_name) {
-        std::cerr << "Error: DB_NAME2 environment variable is not set!" << std::endl;
-        exit(EXIT_FAILURE);
+        logFile << "Error: DB_NAME2 environment variable is not set!" << std::endl;
+        return;
     }
     if (!client_url) {
-        std::cerr << "Error: CLIENT_URL environment variable is not set!" << std::endl;
-        exit(EXIT_FAILURE);
+        logFile << "Error: CLIENT_URL environment variable is not set!" << std::endl;
+        return;
     }
     if (!client_cert) {
-        std::cerr << "Error: MYSQL_CLIENT_CERT environment variable is not set!" << std::endl;
-        exit(EXIT_FAILURE);
+        logFile << "Error: MYSQL_CLIENT_CERT environment variable is not set!" << std::endl;
+        return;
     }
     if (!client_key) {
-        std::cerr << "Error: MYSQL_CLIENT_KEY environment variable is not set!" << std::endl;
-        exit(EXIT_FAILURE);
+        logFile << "Error: MYSQL_CLIENT_KEY environment variable is not set!" << std::endl;
+        return;
     }
     if (!ca_file) {
-        std::cerr << "Error: MYSQL_CA_FILE environment variable is not set!" << std::endl;
-        exit(EXIT_FAILURE);
+        logFile << "Error: MYSQL_CA_FILE environment variable is not set!" << std::endl;
+        return;
     }
 
     // Initialize MySQL
     conn = mysql_init(NULL);
 
     // Set SSL options
-    initLogFile(); // Initialize log file
-
     std::cout << "Key: " << client_key << "\nCert: " << client_cert << "\nCA File: " << ca_file << std::endl;
     std::ifstream file("client-key.pem");
     if (!file) {
-        std::cerr << "Error reading client-key.pem!" << std::endl;
+        logFile << "Error reading client-key.pem!" << std::endl;
         return;
     }
     if (mysql_ssl_set(conn, client_key, client_cert, ca_file, NULL, NULL) != 0) {
-        std::cerr << "Failed to set SSL parameters. Error: " << mysql_error(conn) << std::endl;
+        logFile << "Failed to set SSL parameters. Error: " << mysql_error(conn) << std::endl;
         return;
     } else {
-        std::cerr << "SSL parameters set." << std::endl;
+        logFile << "SSL parameters set." << std::endl;
     }
     
     // Connect to the database
     if (!mysql_real_connect(conn, db_host, db_user, db_password, db_name, 0, NULL, CLIENT_SSL)) {
-        std::cerr << "Error: Could not establish a MySQL connection! Error: " << mysql_error(conn) << std::endl;
+        logFile << "Error: Could not establish a MySQL connection! Error: " << mysql_error(conn) << std::endl;
         return;
     } else {
-        std::cout << "Successfully connected to the MySQL server." << std::endl;
+        logFile << "Successfully connected to the MySQL server." << std::endl;
     }
 
     const char* shipment_id = getenv("SHIPMENT_ID");
     if (!shipment_id) {
-        std::cerr << "Error: SHIPMENT_ID environment variable is not set!" << std::endl;
+        logFile << "Error: SHIPMENT_ID environment variable is not set!" << std::endl;
         return;
     }
 
@@ -147,7 +148,7 @@ void clientMode() {
 
     // Execute the SQL query
     if(mysql_query(conn, query.c_str())) {
-        std::cerr << "SELECT error: " << mysql_error(conn) << std::endl;
+        logFile << "SELECT error: " << mysql_error(conn) << std::endl;
         return;
     }
 
@@ -220,7 +221,6 @@ void clientMode() {
 
     logFile.close(); // Close the log file when done
 }
-
 
 int main() {
     std::string mode;
