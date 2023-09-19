@@ -1,4 +1,4 @@
-#include "/usr/include/httplib.h"
+#define CPPHTTPLIB_OPENSSL_SUPPORT
 #include <iostream>
 #include <fstream>
 #include <unistd.h>
@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <signal.h>
 #include <mysql/mysql.h>
+#include <httplib.h>
 
 const char *LOCK_FILE = "/tmp/hooker.lock";
 
@@ -82,16 +83,40 @@ void clientMode() {
     conn = mysql_init(NULL);
 
     // Set SSL options
-    mysql_ssl_set(conn, client_key, client_cert, ca_file, NULL, NULL);
 
+    std::cout << "Key: " << client_key << "\nCert: " << client_cert << "\nCA File: " << ca_file << std::endl;
+    std::ifstream file("client-key.pem");
+    if (!file) {
+        std::cerr << "Error reading client-key.pem!" << std::endl;
+        return;
+    }
+    if (mysql_ssl_set(conn, client_key, client_cert, ca_file, NULL, NULL) != 0) {
+        std::cerr << "Failed to set SSL parameters. Error: " << mysql_error(conn) << std::endl;
+        return;
+    } else {
+        std::cerr << "SSL parameters set." << std::endl;
+    }
     // Connect to the database
-    if(!mysql_real_connect(conn, db_host, db_user, db_password, db_name, 0, NULL, 0)) {
-        std::cerr << "Error: Could not establish a MySQL connection!" << std::endl;
+    if (!mysql_real_connect(conn, db_host, db_user, db_password, db_name, 0, NULL, CLIENT_SSL)) {
+        std::cerr << "Error: Could not establish a MySQL connection! Error: " << mysql_error(conn) << std::endl;
+        return;
+    } else {
+        std::cout << "Successfully connected to the MySQL server." << std::endl;
+    }
+
+    const char* shipment_id = getenv("SHIPMENT_ID");
+    if (!shipment_id) {
+        std::cerr << "Error: SHIPMENT_ID environment variable is not set!" << std::endl;
         return;
     }
 
+    std::string query = "SELECT * FROM hfc_shipments WHERE order_id = ";
+    query += "'";
+    query += shipment_id;  // append the shipment_id to the query
+    query += "'";
+
     // Execute the SQL query
-    if(mysql_query(conn, "SELECT * FROM <redacted>")) {
+    if(mysql_query(conn, query.c_str())) {
         std::cerr << "SELECT error: " << mysql_error(conn) << std::endl;
         return;
     }
@@ -100,12 +125,28 @@ void clientMode() {
 
     // Process the results and prepare the data for HTTP POST
     while ((row = mysql_fetch_row(res)) != NULL) {
-        httplib::Client cli(client_url);
-        auto response = cli.Post("/", row[0], "text/plain");
+        int numFields = mysql_num_fields(res);
+        std::string payload;
+
+        for (int i = 0; i < numFields; i++) {
+            if (i != 0) {
+                payload += ","; // Add a comma between fields
+            }
+            payload += row[i] ? row[i] : "NULL"; // If the field is NULL, append the string "NULL"
+        }
+
+        std::cout << "Payload being sent: " << payload << std::endl; 
+
+        httplib::SSLClient cli(client_url);
+        auto response = cli.Post("/", payload, "text/plain");
+
         if(response && response->status == 200) {
             std::cout << "Data POSTed successfully!" << std::endl;
         } else {
-            std::cerr << "Failed to POST data." << std::endl;
+            std::cerr << "Failed to POST data. HTTP Status: "
+                      << (response ? std::to_string(response->status) : "No Response")
+                      << ". Reason: " << (response ? response->body : "Unknown error")
+                      << std::endl;
         }
     }
 
