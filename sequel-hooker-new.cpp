@@ -10,29 +10,27 @@
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 
-
 const char *LOCK_FILE = "/tmp/hooker.lock";
-
 std::ofstream logFile;
 
 void initLogFile() {
-    logFile.open("request.log", std::ios::app);
     if (!logFile.is_open()) {
-        std::cerr << "Unable to open log file." << std::endl;
-        exit(EXIT_FAILURE);
+        logFile.open("request.log", std::ios::app);
+        if (!logFile.is_open()) {
+            std::cerr << "Unable to open log file." << std::endl;
+            exit(EXIT_FAILURE);
+        }
     }
 }
 
-void handleWebhook(const httplib::Request& req, httplib::Response& res) {
-    logFile << "Received data: " << req.body << std::endl;
-    std::ofstream logFile("webhook_log.txt", std::ios::app);
-    if (logFile.is_open()) {
-        logFile << "Received data: " << req.body << std::endl;
-        logFile.close();
-    } else {
-        std::cerr << "Unable to open log file." << std::endl;
-    }
+void writeToLog(const std::string& message) {
+    initLogFile();
+    logFile << message << std::endl;
+    logFile.flush();
+}
 
+void handleWebhook(const httplib::Request& req, httplib::Response& res) {
+    writeToLog("Received data: " + req.body);
     res.set_content("{\"status\": \"Received successfully\"}", "application/json");
 }
 
@@ -45,14 +43,12 @@ void signalHandler(int signum) {
 
 std::string rowToJson(MYSQL_RES* res, MYSQL_ROW row) {
     nlohmann::json jsonObj;
-
     MYSQL_FIELD* fields = mysql_fetch_fields(res);
     int numFields = mysql_num_fields(res);
 
     for (int i = 0; i < numFields; i++) {
         const char* field_name = fields[i].name;
         const char* field_value = row[i] ? row[i] : "NULL";
-
         jsonObj[field_name] = field_value;
     }
 
@@ -60,166 +56,85 @@ std::string rowToJson(MYSQL_RES* res, MYSQL_ROW row) {
 }
 
 void clientMode() {
-    // Initialize log file
-    initLogFile();
-
+    // Variables for MySQL
     MYSQL *conn;
     MYSQL_RES *res;
     MYSQL_ROW row;
     MYSQL_FIELD *fields;
 
-    const char* db_host = getenv("DB_HOST2");
-    const char* db_user = getenv("DB_USER2");
-    const char* db_password = getenv("DB_PASSWORD2");
-    const char* db_name = getenv("DB_NAME2");
-    const char* client_url = getenv("CLIENT_URL");
-    const char* client_cert = getenv("MYSQL_CLIENT_CERT");
-    const char* client_key = getenv("MYSQL_CLIENT_KEY");
-    const char* ca_file = getenv("MYSQL_CA_FILE");
-
-    if (!db_host) {
-        logFile << "Error: DB_HOST2 environment variable is not set!" << std::endl;
-        return;
-    }
-    if (!db_user) {
-        logFile << "Error: DB_USER2 environment variable is not set!" << std::endl;
-        return;
-    }
-    if (!db_password) {
-        logFile << "Error: DB_PASSWORD2 environment variable is not set!" << std::endl;
-        return;
-    }
-    if (!db_name) {
-        logFile << "Error: DB_NAME2 environment variable is not set!" << std::endl;
-        return;
-    }
-    if (!client_url) {
-        logFile << "Error: CLIENT_URL environment variable is not set!" << std::endl;
-        return;
-    }
-    if (!client_cert) {
-        logFile << "Error: MYSQL_CLIENT_CERT environment variable is not set!" << std::endl;
-        return;
-    }
-    if (!client_key) {
-        logFile << "Error: MYSQL_CLIENT_KEY environment variable is not set!" << std::endl;
-        return;
-    }
-    if (!ca_file) {
-        logFile << "Error: MYSQL_CA_FILE environment variable is not set!" << std::endl;
-        return;
+    // Collect environment variables
+    const char* env_vars[] = {"DB_HOST2", "DB_USER2", "DB_PASSWORD2", "DB_NAME2", "CLIENT_URL", 
+                              "MYSQL_CLIENT_CERT", "MYSQL_CLIENT_KEY", "MYSQL_CA_FILE", "SHIPMENT_ID"};
+    for (const char* var : env_vars) {
+        if (!getenv(var)) {
+            writeToLog(std::string("Error: ") + var + " environment variable is not set!");
+            return;
+        }
     }
 
-    // Initialize MySQL
+    // Initialize MySQL and set SSL options
     conn = mysql_init(NULL);
-
-    // Set SSL options
-    std::cout << "Key: " << client_key << "\nCert: " << client_cert << "\nCA File: " << ca_file << std::endl;
-    std::ifstream file("client-key.pem");
-    if (!file) {
-        logFile << "Error reading client-key.pem!" << std::endl;
-        return;
-    }
-    if (mysql_ssl_set(conn, client_key, client_cert, ca_file, NULL, NULL) != 0) {
-        logFile << "Failed to set SSL parameters. Error: " << mysql_error(conn) << std::endl;
+    if (mysql_ssl_set(conn, getenv("MYSQL_CLIENT_KEY"), getenv("MYSQL_CLIENT_CERT"), 
+                     getenv("MYSQL_CA_FILE"), NULL, NULL) != 0) {
+        writeToLog("Failed to set SSL parameters. Error: " + std::string(mysql_error(conn)));
         return;
     } else {
-        logFile << "SSL parameters set." << std::endl;
+        writeToLog("SSL parameters set.");
     }
-    
-    // Connect to the database
-    if (!mysql_real_connect(conn, db_host, db_user, db_password, db_name, 0, NULL, CLIENT_SSL)) {
-        logFile << "Error: Could not establish a MySQL connection! Error: " << mysql_error(conn) << std::endl;
+
+    // Database connection
+    if (!mysql_real_connect(conn, getenv("DB_HOST2"), getenv("DB_USER2"), getenv("DB_PASSWORD2"),
+                            getenv("DB_NAME2"), 0, NULL, CLIENT_SSL)) {
+        writeToLog("Error: Could not establish a MySQL connection! Error: " + std::string(mysql_error(conn)));
         return;
     } else {
-        logFile << "Successfully connected to the MySQL server." << std::endl;
+        writeToLog("Successfully connected to the MySQL server.");
     }
 
-    const char* shipment_id = getenv("SHIPMENT_ID");
-    if (!shipment_id) {
-        logFile << "Error: SHIPMENT_ID environment variable is not set!" << std::endl;
-        return;
-    }
-
-    std::string query = "SELECT * FROM hfc_shipments WHERE order_id = ";
-    query += "'";
-    query += shipment_id;  // append the shipment_id to the query
-    query += "'";
-
-    // Execute the SQL query
+    // Construct the SQL query
+    std::string query = "SELECT * FROM hfc_shipments WHERE order_id = '" + std::string(getenv("SHIPMENT_ID")) + "'";
     if(mysql_query(conn, query.c_str())) {
-        logFile << "SELECT error: " << mysql_error(conn) << std::endl;
+        writeToLog("SELECT error: " + std::string(mysql_error(conn)));
         return;
     }
 
     res = mysql_store_result(conn);
-
     fields = mysql_fetch_fields(res);
 
-    // Process the results and prepare the data for HTTP POST
+    // Process results and prepare data for HTTP POST
     while ((row = mysql_fetch_row(res)) != NULL) {
-        int numFields = mysql_num_fields(res);
-        std::string payload = "{";
+        std::string payload = rowToJson(res, row);
+        writeToLog("Payload being sent: " + payload);
 
-        for (int i = 0; i < numFields; i++) {
-            if (i != 0) {
-                payload += ",";
-            }
-            payload += "\"" + std::string(fields[i].name) + "\":";
-            if(row[i]) {
-                payload += "\"" + std::string(row[i]) + "\"";
-            } else {
-                payload += "null";
-            }
-        }
-        payload += "}";
+        writeToLog("Initializing the SSL client...");
+        httplib::SSLClient cli(getenv("CLIENT_URL"));
 
-        logFile << "Payload being sent: " << payload << std::endl;
-
-        httplib::SSLClient cli(client_url);
-
-        // Setting the headers
         cli.set_default_headers({
             {"User-Agent", "sequel-hooker/1.0"},
             {"Accept", "*/*"}
         });
-
-        // Setting the CA certificate path
         cli.set_ca_cert_path("/etc/ssl/certs/ca-certificates.crt");
 
+        writeToLog("Attempting to send request to " + std::string(getenv("CLIENT_URL")));
         auto response = cli.Post("/", payload.c_str(), "application/json");
-
+        
         if (!response) {
-            logFile << "Failed to get a response from the server. The server might be down or there might be a network issue." << std::endl;
+            writeToLog("Failed to get a response from the server.");
         } else {
-            logFile << "HTTP Status: ";
+            writeToLog("Received a response from the server.");
 
-            if (response->status) {
-                logFile << response->status;
+            if (response->status >= 400) {
+                writeToLog("HTTP Error: " + std::to_string(response->status) + " - " + response->body);
             } else {
-                logFile << "unknown";  // Print "unknown" if status is not set
+                writeToLog("HTTP Status: " + std::to_string(response->status));
+                writeToLog("Response Body: " + response->body);
             }
-
-            logFile << std::endl;
-
-            if (response->status >= 400 && response->status < 500) {
-                logFile << "Client Error! HTTP Status: " << response->status << ". Reason: " << response->body << std::endl;
-            } else if (response->status >= 500) {
-                logFile << "Server Error! HTTP Status: " << response->status << ". Reason: " << response->body << std::endl;
-            } else if (response->status != 200) {
-                logFile << "Failed to POST data. HTTP Status: " << response->status << ". Reason: " << response->body << std::endl;
-            }
-
-            // Log response body
-            logFile << "Response Body: " << response->body << std::endl;
         }
     }
 
     // Cleanup
     mysql_free_result(res);
     mysql_close(conn);
-
-    logFile.close(); // Close the log file when done
 }
 
 int main() {
