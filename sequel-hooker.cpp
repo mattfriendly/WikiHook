@@ -91,7 +91,7 @@ void clientMode() {
     }
 
     // Execute the SQL query
-    if(mysql_query(conn, "SELECT * FROM hfc_shipments")) {
+    if(mysql_query(conn, "SELECT * FROM <redacted>")) {
         std::cerr << "SELECT error: " << mysql_error(conn) << std::endl;
         return;
     }
