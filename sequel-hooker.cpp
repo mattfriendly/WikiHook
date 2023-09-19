@@ -53,6 +53,7 @@ void clientMode() {
     MYSQL *conn;
     MYSQL_RES *res;
     MYSQL_ROW row;
+    MYSQL_FIELD *fields;
 
     const char* db_host = getenv("DB_HOST2");
     const char* db_user = getenv("DB_USER2");
@@ -127,7 +128,7 @@ void clientMode() {
         return;
     }
 
-    std::string query = "SELECT * FROM hfc_shipments WHERE order_id = ";
+    std::string query = "SELECT * FROM <redacted> WHERE order_id = ";
     query += "'";
     query += shipment_id;  // append the shipment_id to the query
     query += "'";
@@ -139,31 +140,48 @@ void clientMode() {
     }
 
     res = mysql_store_result(conn);
-// Process the results and prepare the data for HTTP POST
-while ((row = mysql_fetch_row(res)) != NULL) {
-    int numFields = mysql_num_fields(res);
-    std::string payload = "{";
 
-    for (int i = 0; i < numFields; i++) {
-        if (i != 0) {
-            payload += ","; // Add a comma between fields
+    fields = mysql_fetch_fields(res);
+
+    // Process the results and prepare the data for HTTP POST
+    while ((row = mysql_fetch_row(res)) != NULL) {
+        int numFields = mysql_num_fields(res);
+        std::string payload = "{";
+
+        for (int i = 0; i < numFields; i++) {
+            if (i != 0) {
+                payload += ",";
+            }
+            payload += "\"" + std::string(fields[i].name) + "\":";
+            if(row[i]) {
+                payload += "\"" + std::string(row[i]) + "\"";
+            } else {
+                payload += "null";
+            }
         }
-        payload += "\"" + std::string(mysql_fetch_field_direct(res, i)->name) + "\": \"" + (row[i] ? row[i] : "NULL") + "\"";
+        payload += "}";
+
+        std::cout << "Payload being sent: " << payload << std::endl;
+
+        httplib::SSLClient cli(client_url);
+        
+        // Setting the headers
+        cli.set_default_headers({
+            {"User-Agent", "sequel-hooker/1.0"},
+            {"Accept", "*/*"}
+        });
+
+        // Setting the CA certificate path
+        cli.set_ca_cert_path("/etc/ssl/certs/ca-certificates.crt");
+        
+        auto response = cli.Post("/", payload.c_str(), "application/json");
+
+        if (!response) {
+            std::cerr << "Failed to get a response from the server. The server might be down or there might be a network issue." << std::endl;
+        } else if (response->status != 200) {
+            std::cerr << "Failed to POST data. HTTP Status: " << response->status << ". Reason: " << response->body << std::endl;
+        }
     }
-
-    payload += "}";
-
-    std::cout << "Payload being sent: " << payload << std::endl;
-
-    httplib::SSLClient cli(client_url);
-    auto response = cli.Post("/", payload.c_str(), "application/json");
-
-    if (!response) {
-        std::cerr << "Failed to get a response from the server. The server might be down or there might be a network issue." << std::endl;
-    } else if (response->status != 200) {
-        std::cerr << "Failed to POST data. HTTP Status: " << response->status << ". Reason: " << response->body << std::endl;
-    }
-}
 
     // Cleanup
     mysql_free_result(res);
@@ -183,8 +201,7 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    // The following part will only be executed in server mode:
-    
+    // The following part will only be executed in server mode:    
     if (access(LOCK_FILE, F_OK) == 0) {
         std::cerr << "Error: fancy_hooker is already running." << std::endl;
         exit(EXIT_FAILURE);
